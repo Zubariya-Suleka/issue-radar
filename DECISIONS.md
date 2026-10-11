@@ -134,8 +134,30 @@ Format: **Context** (the problem) → **Options** (real alternatives) → **Deci
 
 ---
 
+## D-008 · Gateway API: OpenAI-compatible
+*2026-10-11 · Status: accepted*
+
+**Context.** The gateway needs a public request/response format that the RAG service and SQL agent call.
+
+**Options.** (a) Custom `POST /generate` taking a prompt string — simpler, fully our own design. (b) OpenAI-compatible `POST /v1/chat/completions` taking a list of messages.
+
+**Decision.** OpenAI-compatible.
+
+**Why.** Any existing client, library or tool can use the gateway by changing its base URL, so it doubles as a personal LLM proxy. Service code never knows where the model runs. The messages format is also what chat-tuned models (SmolLM2-Instruct) expect via their chat template.
+
+**Consequences.** We implement a subset of the spec (no streaming, no tools at first) and must document which fields are supported and reject the rest explicitly rather than silently ignoring them.
+
+---
+
+## D-009 · Licence: MIT
+*2026-10-11 · Status: accepted*
+
+**Options.** MIT (short, widely understood) vs Apache-2.0 (explicit patent grant, more formal).
+
+**Decision.** MIT. A portfolio project benefits most from the simplest, most familiar licence; patent terms add little here. Compatible with all dependencies in D-005.
+
+---
+
 ## Open questions
 - Docker Engine in WSL2 vs Docker Desktop (D-007).
-- Project licence (MIT vs Apache-2.0).
-- Gateway API shape: custom `/generate` vs OpenAI-compatible `/v1/chat/completions`.
 - Main RAG eval axis: chunking strategies vs retrieval method (BM25 / dense / hybrid). Issue text is short and identifier-heavy, so chunking may matter mainly for long PR threads.
