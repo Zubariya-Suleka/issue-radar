@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +27,22 @@ class Settings(BaseSettings):
 
     # In-memory LRU of greedy generations (D-015). 0 disables the cache.
     cache_max_entries: int = 1024
+
+    # Client name -> API key, as JSON: GATEWAY_API_KEYS='{"rag": "...", "agent": "..."}'.
+    # Empty means auth is off and every caller is one "anonymous" client (D-016).
+    api_keys: dict[str, str] = {}
+    # Per-client token bucket (D-016). rate_limit_per_minute = 0 disables limiting.
+    rate_limit_per_minute: float = 30.0
+    rate_limit_burst: int = 10
+
+    @field_validator("api_keys")
+    @classmethod
+    def keys_are_distinct_and_non_empty(cls, keys: dict[str, str]) -> dict[str, str]:
+        if any(not key for key in keys.values()):
+            raise ValueError("API keys must not be empty")
+        if len(set(keys.values())) != len(keys):
+            raise ValueError("each client needs its own API key")
+        return keys
 
     # Request log (D-014): JSON lines to stdout, and to this file unless None.
     log_file: Path | None = Path("logs/gateway.jsonl")

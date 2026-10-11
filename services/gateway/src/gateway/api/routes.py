@@ -1,8 +1,11 @@
 import time
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
+from gateway.api.deps import client_name, enforce_rate_limit
+from gateway.api.errors import ApiError
 from gateway.api.schemas import (
     AssistantMessage,
     ChatCompletionRequest,
@@ -21,14 +24,27 @@ async def health(request: Request) -> dict[str, str]:
     return {"status": "ok", "backend": request.app.state.backend.name}
 
 
+def allowed_client(request: Request, client: Annotated[str, Depends(client_name)]) -> str:
+    enforce_rate_limit(request, client)
+    return client
+
+
+# Dependencies run before the body is validated: a caller without a valid key gets 401,
+# and an over-limit caller 429, before anything else.
 @router.post("/v1/chat/completions")
-async def chat_completions(body: ChatCompletionRequest, request: Request) -> ChatCompletionResponse:
+async def chat_completions(
+    body: ChatCompletionRequest,
+    request: Request,
+    client: Annotated[str, Depends(allowed_client)],
+) -> ChatCompletionResponse:
     settings = request.app.state.settings
     backend = request.app.state.backend
 
     max_tokens = body.max_tokens or settings.max_tokens_default
     if max_tokens > settings.max_tokens_cap:
-        raise HTTPException(400, f"max_tokens must be <= {settings.max_tokens_cap}")
+        raise ApiError(
+            400, f"max_tokens must be <= {settings.max_tokens_cap}", "invalid_request_error"
+        )
 
     # Translate the outer (OpenAI) format into the internal contract.
     gen_request = GenerationRequest(

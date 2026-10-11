@@ -6,12 +6,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from gateway.api.errors import ApiError, api_error_handler
 from gateway.api.routes import router
 from gateway.backends.base import ModelBackend
 from gateway.backends.cached import CachedBackend
 from gateway.backends.factory import build_backend
 from gateway.backends.serial import BackendBusyError, SerialBackend
 from gateway.config import Settings
+from gateway.rate_limit import RateLimiter
 from gateway.request_log import close_request_log, configure_request_log, log_requests
 
 
@@ -40,11 +42,17 @@ def create_app(settings: Settings | None = None, backend: ModelBackend | None = 
         if settings.cache_max_entries > 0:
             model = CachedBackend(model, max_entries=settings.cache_max_entries)
         app.state.backend = model
+        app.state.rate_limiter = (
+            RateLimiter(settings.rate_limit_per_minute, settings.rate_limit_burst)
+            if settings.rate_limit_per_minute > 0
+            else None
+        )
         yield
         close_request_log()
 
     app = FastAPI(title="issue-radar gateway", lifespan=lifespan)
     app.middleware("http")(log_requests)
     app.include_router(router)
+    app.add_exception_handler(ApiError, api_error_handler)
     app.add_exception_handler(BackendBusyError, backend_busy_handler)
     return app
