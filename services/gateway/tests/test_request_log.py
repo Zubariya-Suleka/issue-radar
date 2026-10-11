@@ -35,17 +35,25 @@ def test_identical_prompts_share_a_hash(client, read_log):
 
 
 def test_caller_request_id_is_kept(client, read_log):
-    response = client.get("/health", headers={"X-Request-ID": "rag-42"})
+    response = client.post("/v1/chat/completions", json=BODY, headers={"X-Request-ID": "rag-42"})
 
     assert response.headers["x-request-id"] == "rag-42"
     assert read_log()[0]["request_id"] == "rag-42"
 
 
 def test_unsafe_caller_request_id_is_replaced(client, read_log):
-    response = client.get("/health", headers={"X-Request-ID": 'evil"\n{"status":200}'})
+    unsafe = 'evil"\n{"status":200}'
+    response = client.post("/v1/chat/completions", json=BODY, headers={"X-Request-ID": unsafe})
 
-    assert response.headers["x-request-id"] != 'evil"\n{"status":200}'
+    assert response.headers["x-request-id"] != unsafe
     assert len(read_log()) == 1
+
+
+def test_health_checks_are_not_logged_but_get_a_request_id(client, settings):
+    response = client.get("/health")
+
+    assert response.headers["x-request-id"]
+    assert not settings.log_file.exists() or settings.log_file.read_text() == ""
 
 
 def test_validation_errors_are_logged(client, read_log):

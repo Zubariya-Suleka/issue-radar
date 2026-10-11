@@ -22,6 +22,8 @@ from typing import Any
 from fastapi import Request, Response
 
 REQUEST_ID_HEADER = "X-Request-ID"
+# Docker's health check calls /health every 30 s; logging it would bury real traffic.
+_UNLOGGED_PATHS = frozenset({"/health"})
 # Caller-supplied ids end up in our logs; accept only short, plain ones.
 _VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
@@ -70,9 +72,9 @@ async def log_requests(
         fields["error"] = type(exc).__name__
         raise
     finally:
-        logger.info(
-            "request", extra={"fields": {**fields, "status": status, "total_ms": elapsed_ms(start)}}
-        )
+        if request.url.path not in _UNLOGGED_PATHS:
+            line = {**fields, "status": status, "total_ms": elapsed_ms(start)}
+            logger.info("request", extra={"fields": line})
         _fields.reset(token)
 
 
