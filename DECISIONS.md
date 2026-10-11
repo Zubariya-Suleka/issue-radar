@@ -245,8 +245,83 @@ Format: **Context** (the problem) → **Options** (real alternatives) → **Deci
 
 ---
 
+## D-015 · Cache: in-memory LRU of greedy generations
+*2026-10-11 · Status: accepted*
+
+**Context.** Generation costs seconds (D-013); eval runs and agents repeat identical prompts.
+
+**Options.** Where: (a) in-process dict, (b) SQLite on disk (survives restarts), (c) Valkey (shared across processes). What: (i) everything, (ii) only temperature 0.
+
+**Decision.** (a) + (ii). `CachedBackend` wraps `SerialBackend` (so a hit never queues for the model), keyed on the frozen `GenerationRequest` itself (D-010 made it hashable for this), LRU-evicted at `GATEWAY_CACHE_MAX_ENTRIES` (1024; 0 disables). Default temperature stays 0.0 — this resolves the open question.
+
+**Why.** Greedy output is deterministic, so a cached answer is exactly what the model would say again. A sampled answer is one draw; replaying it silently turns sampling off for that prompt. One gateway process means no shared state is needed; Valkey only pays off with several processes. Failures raise and are never stored.
+
+**Consequences.**
+- Lost on restart. If eval reruns across restarts become the main use, move to SQLite (stdlib, no new service).
+- No single-flight: two identical requests arriving together both miss and both generate. Rare for sequential eval loops; revisit if logs show it.
+- Hits report the original token usage (OpenAI-like), and the log's `cache` field (hit / miss / bypass) tells them apart.
+
+---
+
+## D-016 · Client identity and rate limiting
+*2026-10-11 · Status: accepted*
+
+**Context.** The serial queue (D-011) protects the CPU but not fairness: one runaway eval loop can fill the queue and push everyone else into 503s. A limiter needs to know who is calling.
+
+**Options.** Identity: (a) client IP — on one laptop or in compose everything looks alike; (b) API keys. Algorithm: fixed window, sliding log, token bucket. Placement: before or after the cache.
+
+**Decision.**
+- **API keys** as `Authorization: Bearer <key>` (OpenAI SDKs always send one), mapped to client names via `GATEWAY_API_KEYS='{"rag": "...", "agent": "..."}'`; compared in constant time. No keys configured → auth off, every caller is one `anonymous` client.
+- **Token bucket per client**, `GATEWAY_RATE_LIMIT_PER_MINUTE` (30) with `GATEWAY_RATE_LIMIT_BURST` (10); 0 disables. Over the limit → 429 + `Retry-After`, which OpenAI SDKs retry automatically.
+- Runs as FastAPI dependencies, **before body validation and before the cache**: unauthenticated callers learn nothing, and limits are predictable for clients (a hit still counts).
+- Gateway errors now use OpenAI's `{"error": {message, type, code}}` body (`ApiError`).
+
+**Why.** Token bucket allows short bursts but caps the long-run rate, with no window boundary at which a client can fire twice the limit. Keys keep the bucket dict bounded (one per configured client); per-IP buckets would need eviction.
+
+**Consequences.** In-memory state: correct for one process only. Limits count requests, not tokens; a token-based limit (like OpenAI's TPM) would track cost better and can be added once logs show request sizes vary a lot.
+
+---
+
+## D-017 · Prompt-injection detection: TF-IDF per paragraph, flag by default
+*2026-10-11 · Status: accepted*
+
+**Context.** Issue text is written by strangers and fed to the model (D-003). Detection needs high recall on injections *and* a low false-positive rate on ordinary issue text, which is full of "ignore", "instructions", "previous version", code and templates.
+
+**Benchmark** (`services/gateway/benchmarks/prompt_injection.py`, threshold 0.5). deepset/prompt-injections test split (116 rows, 60 injections, ~40% German); "hidden" = each test injection appended to a held-out pandas issue; false positives on 200 held-out pandas issues and 400 scikit-learn issues never used in training.
+
+| Detector | P | R | R hidden in issue | FP pandas | FP scikit-learn | ms / issue |
+|---|---|---|---|---|---|---|
+| Heuristic rules (EN/DE) | 1.00 | 0.25 | 0.25 | 0.0% | 0.2% | 0.4 |
+| TF-IDF, deepset only | 1.00 | 0.87 | 1.00 | 99.0% | 96.2% | 4 |
+| TF-IDF + pandas issues as benign | 1.00 | 0.80 | **0.03** | 0.0% | 0.0% | 4 |
+| **TF-IDF + issues, per paragraph** | 1.00 | 0.80 | **0.80** | 4.0% | 10.5% | 19 |
+| DeBERTa (protectai v2), whole text | 1.00 | 0.37 | 0.02 | 0.0% | — | 1,155 |
+| DeBERTa, per paragraph | 1.00 | 0.37 | 0.78 | 70.5% | — | 3,535 |
+
+(DeBERTa rows are from the earlier run with pandas issues only; `--with-deberta` reruns them, ~15 min.)
+
+**What the numbers taught.**
+- **In-distribution scores mislead.** TF-IDF trained on deepset alone has the best F1 (0.93) and flags 99% of real issues: deepset's benign class is short chat questions, so it learned "long and structured = attack".
+- **Adding real issues as benign examples fixes false positives but creates a blind spot**: scored as a whole, an injection appended to an issue is outvoted by the issue's style (3% caught). **Per-paragraph scoring** (max over paragraphs) restores recall to 0.80.
+- **DeBERTa** (Apache-2.0, ~740 MB) is English-only by its card, misses most of deepset's injections, flags 70% of issue paragraphs, and costs seconds per issue on this CPU. Rejected. Its training data list does not name deepset's dataset, but unnamed MIT sources make overlap impossible to rule out.
+- **The model learned some pandas style**: false positives rise from 4% (held-out pandas) to 10.5% (unseen scikit-learn). Fix: train on issues from all four repos once ingestion exists (D-004).
+- The heuristic rules were written after seeing ~16 example rows (8 train, 8 test); its test numbers are slightly optimistic.
+
+**Decision.**
+- Detector: heuristic by default (no dependencies, no artifact, works on a fresh clone); **TF-IDF per paragraph recommended** via `GATEWAY_SAFETY_DETECTOR=tfidf` after running the benchmark, which saves `models/prompt_injection_tfidf.joblib` (gitignored) — exactly the model measured. scikit-learn is the gateway's `safety` extra.
+- Mode: **flag** by default (answer, log `injection_score`, set `X-Injection-Flagged: true`); `block` returns 400 `prompt_injection_detected`. With ~10% false positives on unseen repos, blocking would refuse real issues.
+- Scope: **user messages only**. Contract for the RAG service and agent: untrusted text goes in user messages; system messages hold the caller's own instructions.
+- Scoring runs on a worker thread, before the cache.
+
+**What failed.** First benchmark run fetched issues from `/repos/{repo}/issues`, which mixes in PRs (26 issues out of 400 items) — switched to the search API. The run crashed printing issue text to a cp1252 Windows console — stdout is now reconfigured to UTF-8 and results are written before printing.
+
+**Consequences.** Detection is a signal, not a guarantee: 20% of known injections pass, and novel phrasings more. The real defence is downstream — the agent must not have tools whose misuse matters (e.g. a read-only database role, to decide in the SQL agent phase). joblib is pickle: load only models you trained yourself. The saved model is tied to the scikit-learn version that trained it.
+
+---
+
 ## Open questions
 - Docker Engine in WSL2 vs Docker Desktop (D-007).
-- Default temperature (currently 0.0, greedy). Revisit with the cache design: caching non-greedy outputs changes their meaning.
+- ~~Default temperature~~ — resolved in D-015: stays 0.0; only greedy outputs are cached.
+- Retrain the injection detector on issues from all four repos once ingestion exists (D-017), and choose its threshold on training data rather than the default 0.5.
 - llama.cpp backend (llama-cpp-python, MIT; quantised GGUF) as a second local backend. Likely 2–4× faster on CPU than transformers; measure against D-013's 11.5 tok/s baseline and check output quality at Q8/Q4 before switching. Windows install needs a prebuilt CPU wheel or a C++ toolchain.
 - Main RAG eval axis: chunking strategies vs retrieval method (BM25 / dense / hybrid). Issue text is short and identifier-heavy, so chunking may matter mainly for long PR threads.
