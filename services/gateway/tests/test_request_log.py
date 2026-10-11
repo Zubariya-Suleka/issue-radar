@@ -89,8 +89,10 @@ def test_queue_and_generation_time_are_logged_separately(settings, read_log):
         client.post("/v1/chat/completions", json=BODY)
 
     [line] = read_log()
-    assert line["queue_ms"] < 50
-    assert line["generate_ms"] >= 50
+    # Margins, not exact values: Windows timers tick every ~15.6 ms, so a 50 ms sleep can
+    # measure as 48.
+    assert line["queue_ms"] < 20
+    assert line["generate_ms"] >= 35
     assert line["total_ms"] >= line["queue_ms"] + line["generate_ms"]
 
 
