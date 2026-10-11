@@ -1,0 +1,32 @@
+[project]
+name = "issue-radar"
+version = "0.1.0"
+description = "Find open-source issues worth contributing to."
+requires-python = ">=3.12"
+dependencies = ["issue-radar-gateway"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["services/gateway"]
+
+[tool.uv.sources]
+issue-radar-gateway = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8.3", "httpx2", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["services/gateway/tests"]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["gateway"]
