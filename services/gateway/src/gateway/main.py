@@ -6,16 +6,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from gateway.api.routes import router
+from gateway.backends.base import ModelBackend
+from gateway.backends.factory import build_backend
 from gateway.config import Settings
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, backend: ModelBackend | None = None) -> FastAPI:
+    """`backend` lets tests inject a specific backend instead of building one from settings."""
     settings = settings or Settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # Runs once at startup, before the first request; anything expensive goes here.
+        # Runs once at startup, before the first request: load the model here, never per request.
         app.state.settings = settings
+        app.state.backend = backend or build_backend(settings)
         yield
 
     app = FastAPI(title="issue-radar gateway", lifespan=lifespan)

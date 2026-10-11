@@ -1,4 +1,4 @@
-def test_health_reports_ok_and_backend(client):
+def test_health_reports_ok_and_backend_name(client):
     response = client.get("/health")
 
     assert response.status_code == 200
