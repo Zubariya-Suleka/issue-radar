@@ -1,5 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi.testclient import TestClient
 
+from gateway.backends.fake import FakeBackend
 from gateway.main import create_app
 from gateway.request_log import annotate
 
@@ -79,6 +82,34 @@ def test_content_is_logged_only_when_enabled(settings, read_log):
     [line] = read_log()
     assert line["messages"] == BODY["messages"]
     assert line["response_text"] == "echo: hello there"
+
+
+def test_queue_and_generation_time_are_logged_separately(settings, read_log):
+    with TestClient(create_app(settings, backend=FakeBackend(delay_s=0.05))) as client:
+        client.post("/v1/chat/completions", json=BODY)
+
+    [line] = read_log()
+    assert line["queue_ms"] < 50
+    assert line["generate_ms"] >= 50
+    assert line["total_ms"] >= line["queue_ms"] + line["generate_ms"]
+
+
+def test_busy_rejection_logs_the_time_spent_waiting(settings, read_log):
+    settings.queue_timeout_s = 0.05
+    app = create_app(settings, backend=FakeBackend(delay_s=0.3))
+    with TestClient(app) as client:
+        with ThreadPoolExecutor(2) as pool:
+            statuses = sorted(
+                f.result().status_code
+                for f in [
+                    pool.submit(client.post, "/v1/chat/completions", json=BODY) for _ in range(2)
+                ]
+            )
+
+    assert statuses == [200, 503]
+    busy = next(line for line in read_log() if line["status"] == 503)
+    assert busy["queue_ms"] >= 50
+    assert "generate_ms" not in busy
 
 
 def test_annotate_outside_a_request_is_a_no_op():
