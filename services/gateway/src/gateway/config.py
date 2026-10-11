@@ -23,3 +23,8 @@ class Settings(BaseSettings):
 
     # How long a request may wait for its turn on the model before getting a 503 (D-011).
     queue_timeout_s: float = 30.0
+
+    # Request log (D-014): JSON lines to stdout, and to this file unless None.
+    log_file: Path | None = Path("logs/gateway.jsonl")
+    # Debug only: also log prompt and response text. Issue text can contain personal data (D-006).
+    log_content: bool = False

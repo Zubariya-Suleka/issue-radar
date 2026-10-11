@@ -11,6 +11,7 @@ from gateway.api.schemas import (
     Usage,
 )
 from gateway.backends.base import GenerationRequest, Message
+from gateway.request_log import annotate, prompt_hash
 
 router = APIRouter()
 
@@ -37,7 +38,26 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Cha
             body.temperature if body.temperature is not None else settings.default_temperature
         ),
     )
+    # Logged before generating, so a 503 or a crash still records what was asked.
+    annotate(
+        model=backend.name,
+        n_messages=len(gen_request.messages),
+        max_tokens=gen_request.max_tokens,
+        temperature=gen_request.temperature,
+        prompt_sha256=prompt_hash((m.role, m.content) for m in gen_request.messages),
+    )
+    if settings.log_content:
+        annotate(messages=[{"role": m.role, "content": m.content} for m in gen_request.messages])
+
     result = await backend.generate(gen_request)
+
+    annotate(
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        finish_reason=result.finish_reason,
+    )
+    if settings.log_content:
+        annotate(response_text=result.text)
 
     return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex}",

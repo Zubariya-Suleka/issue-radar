@@ -17,6 +17,7 @@ htmlcov/
 # Data and model artifacts (rebuilt by ingestion code, never committed — see DECISIONS.md D-006)
 data/
 models/
+logs/
 *.parquet
 *.sqlite
 

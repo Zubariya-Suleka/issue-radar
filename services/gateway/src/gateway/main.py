@@ -11,6 +11,7 @@ from gateway.backends.base import ModelBackend
 from gateway.backends.factory import build_backend
 from gateway.backends.serial import BackendBusyError, SerialBackend
 from gateway.config import Settings
+from gateway.request_log import close_request_log, configure_request_log, log_requests
 
 
 async def backend_busy_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -29,13 +30,16 @@ def create_app(settings: Settings | None = None, backend: ModelBackend | None = 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Runs once at startup, before the first request: load the model here, never per request.
+        configure_request_log(settings.log_file)
         app.state.settings = settings
         app.state.backend = SerialBackend(
             backend or build_backend(settings), queue_timeout_s=settings.queue_timeout_s
         )
         yield
+        close_request_log()
 
     app = FastAPI(title="issue-radar gateway", lifespan=lifespan)
+    app.middleware("http")(log_requests)
     app.include_router(router)
     app.add_exception_handler(BackendBusyError, backend_busy_handler)
     return app
