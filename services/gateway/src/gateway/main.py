@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from gateway.api.routes import router
 from gateway.backends.base import ModelBackend
+from gateway.backends.cached import CachedBackend
 from gateway.backends.factory import build_backend
 from gateway.backends.serial import BackendBusyError, SerialBackend
 from gateway.config import Settings
@@ -32,9 +33,13 @@ def create_app(settings: Settings | None = None, backend: ModelBackend | None = 
         # Runs once at startup, before the first request: load the model here, never per request.
         configure_request_log(settings.log_file)
         app.state.settings = settings
-        app.state.backend = SerialBackend(
+        # Cache outside the queue: a hit never waits for the model.
+        model: ModelBackend = SerialBackend(
             backend or build_backend(settings), queue_timeout_s=settings.queue_timeout_s
         )
+        if settings.cache_max_entries > 0:
+            model = CachedBackend(model, max_entries=settings.cache_max_entries)
+        app.state.backend = model
         yield
         close_request_log()
 

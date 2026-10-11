@@ -18,11 +18,14 @@ class Settings(BaseSettings):
 
     max_tokens_default: int = 256
     max_tokens_cap: int = 512
-    # Provisional: revisit when designing the cache (greedy decoding makes outputs repeatable).
+    # Greedy by default: repeatable outputs, which the cache relies on (D-015).
     default_temperature: float = 0.0
 
     # How long a request may wait for its turn on the model before getting a 503 (D-011).
     queue_timeout_s: float = 30.0
+
+    # In-memory LRU of greedy generations (D-015). 0 disables the cache.
+    cache_max_entries: int = 1024
 
     # Request log (D-014): JSON lines to stdout, and to this file unless None.
     log_file: Path | None = Path("logs/gateway.jsonl")
