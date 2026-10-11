@@ -222,6 +222,29 @@ Format: **Context** (the problem) → **Options** (real alternatives) → **Deci
 
 ---
 
+## D-014 · Request logging: one JSON line per request
+*2026-10-11 · Status: accepted*
+
+**Context.** The cache, rate limiter, safety checks and backend comparisons all need data about real traffic: repeat rates, per-client volume, latency split, flagged requests.
+
+**Options.** (a) Scattered log messages (started / generating / done). (b) One line per request with every field ("canonical log line"). (c) OpenTelemetry traces + Prometheus metrics.
+
+**Decision.** (b), with stdlib `logging` and a small JSON formatter, written to stdout and `logs/gateway.jsonl` (gitignored; `GATEWAY_LOG_FILE`).
+- **Middleware** writes the line when the request ends, so 422s (rejected before the route), 503s and crashes (500 + exception class) are logged too.
+- Layers add fields through `annotate()`, backed by a per-request `ContextVar`: the route adds model, token counts, `max_tokens`, `temperature`, `prompt_sha256`; `SerialBackend` adds `queue_ms` and `generate_ms`. No timing data in the backend contract (D-010).
+- **No prompt or response text by default** (D-006: issue text can carry personal data). `prompt_sha256` over (role, content) pairs shows repeated prompts without storing them; with `max_tokens` and `temperature` it is enough to measure what a cache would have hit. `GATEWAY_LOG_CONTENT=true` adds text for debugging.
+- **Request ID:** a caller's `X-Request-ID` is kept if it matches `[A-Za-z0-9._-]{1,128}`, otherwise replaced (it lands in our logs); echoed in the response. Lets RAG / agent calls be followed across services later.
+
+**Why.** One line = one row: loads straight into pandas or Postgres for analysis. (a) needs joining by ID before any question can be answered. (c) is built for many services on many hosts; at one gateway on a laptop, metrics can be derived from the lines.
+
+**Consequences.**
+- `client` is `null` until the rate limiter defines client identity.
+- Uvicorn's own access log duplicates part of each line; run with `--no-access-log`.
+- No rotation yet; the file grows until rotated or deleted.
+- First measurement: a cold first request ran at ~7 tok/s vs 11.5 tok/s warm benchmark (D-013). A startup warm-up generation is a possible later fix.
+
+---
+
 ## Open questions
 - Docker Engine in WSL2 vs Docker Desktop (D-007).
 - Default temperature (currently 0.0, greedy). Revisit with the cache design: caching non-greedy outputs changes their meaning.

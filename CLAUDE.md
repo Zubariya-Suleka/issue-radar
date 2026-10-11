@@ -21,8 +21,9 @@ uv sync --all-packages --extra local       # + torch/transformers for SmolLM (pl
 uv run pytest                              # tests (fast; never load a model)
 uv run pytest -m slow                      # real-model tests (~30 s; skipped if weights not cached)
 uv run ruff check . && uv run ruff format --check .
-uv run uvicorn gateway.main:create_app --factory          # gateway on :8000
-# PowerShell: $env:GATEWAY_BACKEND="smollm"; uv run uvicorn gateway.main:create_app --factory
+uv run uvicorn gateway.main:create_app --factory --no-access-log   # gateway on :8000
+# PowerShell: $env:GATEWAY_BACKEND="smollm"; uv run uvicorn gateway.main:create_app --factory --no-access-log
+# Request log (D-014): one JSON line per request on stdout and in logs/gateway.jsonl
 ```
 
 ## Environment gotchas (Windows laptop, CPU only, 16 GB RAM)
@@ -35,8 +36,9 @@ uv run uvicorn gateway.main:create_app --factory          # gateway on :8000
 - `backends/serial.py` — one generation at a time, queue timeout → 503 (D-011).
 - `backends/fake.py` — instant echo backend for tests. `backends/smollm.py` — SmolLM2 via transformers, bf16 (D-013).
 - `api/schemas.py` + `api/routes.py` — OpenAI-compatible subset; unsupported fields → 422 (D-008).
+- `request_log.py` — middleware + `annotate()`: any layer adds fields to the request's single log line (D-014).
 
 ## Current status — update at the end of each session
-- Done: repo, licence, DECISIONS D-001..D-013, gateway skeleton, SmolLM backend (written by Claude at the owner's request; 13 fast + 7 slow tests passing). Model weights cached in G:\cache\huggingface (~730 MB).
-- **Next:** request logging → cache (revisit default temperature) → rate limiter → safety checks + prompt-injection benchmark (deepset/prompt-injections) → Docker.
+- Done: repo, licence, DECISIONS D-001..D-014, gateway skeleton, SmolLM backend (written by Claude at the owner's request), request logging (23 fast + 7 slow tests passing). Model weights cached in G:\cache\huggingface (~730 MB).
+- **Next:** cache (owner writes; revisit default temperature; use prompt_sha256 repeat rate from the log to size it) → rate limiter (decide client identity) → safety checks + prompt-injection benchmark (deepset/prompt-injections) → Docker.
 - Candidate: llama.cpp backend as a measured speed experiment (open question in DECISIONS).
