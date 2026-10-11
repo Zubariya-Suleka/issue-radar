@@ -1,0 +1,58 @@
+# Whole system, one command (D-002, D-018). From Windows:
+#   .\scripts\stack.ps1 up | down | status | logs
+# The gateway is then on http://localhost:8000 (WSL forwards localhost to Windows).
+name: issue-radar
+
+x-model-id: &model-id HuggingFaceTB/SmolLM2-360M-Instruct
+
+services:
+  model-cache:
+    # One-shot: copy the model from the Hugging Face cache on G: into the `hf` volume.
+    # Volumes live on the WSL distro's own disk (G:\wsl\issue-radar\ext4.vhdx), which reads
+    # far faster than the Windows mount (13 MB/s measured): gateway startup drops from
+    # ~70 s to seconds. Recopies only when the model's revision (refs/main) changes.
+    image: python:3.12-slim
+    environment:
+      MODEL_ID: *model-id
+    volumes:
+      - ${HF_CACHE_DIR:-/mnt/g/cache/huggingface}:/hf-host:ro
+      - hf:/hf
+    command:
+      - sh
+      - -ec
+      - |
+        dir="models--$$(echo "$$MODEL_ID" | sed 's#/#--#g')"
+        src="/hf-host/hub/$$dir"; dst="/hf/hub/$$dir"
+        [ -d "$$src" ] || { echo "$$MODEL_ID is not in the HF cache on G:; download it first (see CLAUDE.md)"; exit 1; }
+        if cmp -s "$$src/refs/main" "$$dst/refs/main"; then echo "model up to date in volume"; exit 0; fi
+        echo "copying $$MODEL_ID into the volume (one-time, ~1 min)"
+        mkdir -p /hf/hub && rm -rf "$$dst" "$$dst.tmp"
+        cp -r "$$src" "$$dst.tmp" && mv "$$dst.tmp" "$$dst"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    depends_on:
+      model-cache:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8000:8000"  # this machine only, not the network
+    environment:
+      GATEWAY_BACKEND: smollm
+      GATEWAY_MODEL_ID: *model-id
+      GATEWAY_SAFETY_DETECTOR: tfidf
+      HF_HOME: /hf
+      HF_HUB_OFFLINE: "1"  # never download inside the container; weights come from the volume
+    env_file:
+      - path: .env  # optional local overrides (API keys etc.)
+        required: false
+    volumes:
+      - hf:/hf:ro  # read-only: the gateway can use the weights but not change them
+      - ./models:/app/models:ro  # injection detector trained by the benchmark (D-017)
+      - ./logs:/app/logs
+    mem_limit: 3g  # SmolLM ~0.7 GB + torch overhead; protects the rest of the laptop
+    restart: unless-stopped
+
+volumes:
+  hf:

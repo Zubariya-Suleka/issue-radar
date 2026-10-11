@@ -1,0 +1,13 @@
+# Keep the build context small: only pyproject files, uv.lock and source are needed.
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+data/
+models/
+logs/
+.env
+.env.*
+**/tests
+**/benchmarks
