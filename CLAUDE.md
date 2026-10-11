@@ -1,7 +1,7 @@
 # issue-radar — working notes for Claude Code
 
 Find open-source issues worth contributing to. Three parts, built in order:
-1. **LLM gateway** (`services/gateway`) — OpenAI-compatible FastAPI service, swappable model backend, cache, logging, rate limiting, safety checks. **Code complete; Docker pending.**
+1. **LLM gateway** (`services/gateway`) — OpenAI-compatible FastAPI service, swappable model backend, cache, logging, rate limiting, safety checks. **Done, runs in Docker.**
 2. **RAG service** — retrieval over GitHub issues/PRs of pandas, scikit-learn, pydantic, polars; evaluated with free labels (duplicate issues, issue → fixing PR).
 3. **SQL agent** — function-calling agent over Postgres (issues, PRs, labels, contributors), with tests for wrong tool calls and bad SQL.
 
@@ -25,6 +25,8 @@ uv run ruff check . && uv run ruff format --check .
 uv run uvicorn gateway.main:create_app --factory --no-access-log   # gateway on :8000
 # PowerShell: $env:GATEWAY_BACKEND="smollm"; uv run uvicorn gateway.main:create_app --factory --no-access-log
 uv run python services/gateway/benchmarks/prompt_injection.py      # detector benchmark; saves models/prompt_injection_tfidf.joblib
+.\scripts\stack.ps1 up | down | status | logs                       # Docker stack from Windows (D-018)
+wsl -d issue-radar                                                  # shell in the Docker distro; repo at /mnt/g/gitrepos/issue-radar
 ```
 Useful settings (env or `.env`, prefix `GATEWAY_`): `BACKEND=smollm`, `SAFETY_DETECTOR=tfidf`, `SAFETY_MODE=flag|block|off`, `API_KEYS='{"rag":"..."}'`, `RATE_LIMIT_PER_MINUTE`, `CACHE_MAX_ENTRIES`, `LOG_CONTENT=true` (debug only). Full list: `config.py`.
 
@@ -33,7 +35,10 @@ Useful settings (env or `.env`, prefix `GATEWAY_`): `BACKEND=smollm`, `SAFETY_DE
 - **HF downloads:** model repos often carry GBs of ONNX variants. Download named files only (see `test_smollm_backend.py`); `hf download` ignores `--include` when filenames are given.
 - **PowerShell 5.1** `Set-Content -Encoding utf8` writes a BOM, which breaks `pyproject.toml`. Edit files with the editor tools instead.
 - **Windows timers** tick every ~15.6 ms: timing tests need margins.
-- **Docker** is not set up for this project yet; its storage defaults to C:. Decide engine and move storage to G: before containerising (D-007).
+- **G: is a spinning HDD** (C: is NVMe). Cold starts and anything reading many small files are slow there; measure before blaming code.
+- **Docker** = Engine in the dedicated `issue-radar` WSL distro, disk at `G:\wsl\issue-radar` (D-018). Use `stack.ps1`, which keeps the distro alive; WSL stops an idle distro after ~15 s. Docker Desktop and the `Ubuntu` distro also exist on C: — leave them alone.
+- **Downloads inside WSL are slow from PyPI's CDN** (ISP IPv4 route; WSL has no IPv6). A first image build takes ~25 min; later builds are cached.
+- **Shell scripts for WSL:** PowerShell expands `$(...)` inside `wsl -- sh -c "..."` — put the script in a file and run `wsl -d issue-radar -u root -- sh /mnt/c/.../script.sh`.
 - Model: SmolLM2-360M-Instruct on CPU (D-001). Embeddings: all-MiniLM-L6-v2.
 
 ## Code map (gateway)
@@ -49,6 +54,6 @@ Request path: middleware (request ID, log line) → API key + rate limit (depend
 - `benchmarks/prompt_injection.py` — the evidence behind D-017.
 
 ## Current status — update at the end of each session
-- Done: DECISIONS D-001..D-017. Gateway: SmolLM backend, request logging, cache, API keys + rate limiting, prompt-injection detection with benchmark (58 fast + 7 slow tests). Cached on G:: SmolLM2 (~730 MB), DeBERTa detector (~740 MB, rejected in D-017 — can be deleted from G:\cache\huggingface). Local commits since b17f6ff are **not pushed** (owner to confirm).
-- **Next:** Docker (owner decides engine and storage location, D-007) → start the RAG service: GitHub ingestion into Postgres with the duplicate normaliser (D-004), which also unblocks retraining the injection detector on all four repos.
-- Candidates: llama.cpp backend as a measured speed experiment; startup warm-up generation (D-014); SQLite cache if restarts hurt (D-015).
+- Done: DECISIONS D-001..D-018. Gateway complete and containerised: SmolLM backend with startup warm-up, request logging, cache, API keys + rate limiting, prompt-injection detection (TF-IDF in Docker and via `.env`), Docker stack (61 fast + 7 slow tests). Cached on G:: SmolLM2 (~730 MB), DeBERTa detector (~740 MB, rejected in D-017; delete only if the owner agrees).
+- **Next:** start the RAG service — Postgres + pgvector in compose, GitHub ingestion with the duplicate normaliser (D-004), which also unblocks retraining the injection detector on all four repos.
+- Candidates: llama.cpp backend as a measured speed experiment; SQLite cache if restarts hurt (D-015); WSL mirrored networking for fast PyPI downloads (owner's call, global).

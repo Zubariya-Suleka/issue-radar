@@ -130,7 +130,7 @@ Format: **Context** (the problem) → **Options** (real alternatives) → **Deci
 
 **Decision.** The repo lives at `G:\gitrepos\issue-radar`. The Hugging Face cache (`HF_HOME`) and local data directories will point to G:.
 
-**Open.** Docker storage defaults to C: whichever engine is used (Docker Desktop's VM disk or the WSL distro disk). To decide before containerising: Docker Engine in WSL2 (open source, lower RAM, distro disk moved to G: with `wsl --manage <distro> --move`) vs Docker Desktop (proprietary but free for personal use, disk image location configurable).
+**Open (resolved in D-018).** Docker storage defaults to C: whichever engine is used (Docker Desktop's VM disk or the WSL distro disk). To decide before containerising: Docker Engine in WSL2 (open source, lower RAM, distro disk moved to G: with `wsl --manage <distro> --move`) vs Docker Desktop (proprietary but free for personal use, disk image location configurable).
 
 ---
 
@@ -319,8 +319,36 @@ Format: **Context** (the problem) → **Options** (real alternatives) → **Deci
 
 ---
 
+## D-018 · Docker: Engine in a dedicated WSL distro on G:
+*2026-10-11 · Status: accepted (resolves the open part of D-007)*
+
+**Context.** Owner's requirements: the lighter option, with everything on G:. Found on the machine: Docker Desktop already installed and running, and an `Ubuntu` distro — both with their disks on C:. G: turned out to be a **spinning HDD** (C: is NVMe).
+
+**Options.** (a) Docker Desktop, disk image moved to G: — already installed, but its own VM and background services, proprietary licence. (b) Docker Engine inside the existing Ubuntu, distro moved to G: — touches the owner's existing environment. (c) Docker Engine in a **new dedicated distro created directly on G:**.
+
+**Decision.** (c): `wsl --install Ubuntu-24.04 --name issue-radar --location G:\wsl\issue-radar`, with Ubuntu's own `docker.io`, `docker-compose-v2`, `docker-buildx` (Apache-2.0). Images and volumes live in `/var/lib/docker` inside `G:\wsl\issue-radar\ext4.vhdx`. `appendWindowsPath=false` in its `wsl.conf` so `docker` there can never resolve to Docker Desktop's `docker.exe`. Existing Ubuntu and Docker Desktop untouched.
+
+**Image** (`services/gateway/Dockerfile`, ~2 GB, mostly CPU torch): multi-stage with uv; the venv holds third-party dependencies only and the code is a separate few-KB layer (`PYTHONPATH`), because installing the package into the venv made every code edit re-copy 1.8 GB. Non-root user, health check, `127.0.0.1`-only port, 3 GB memory cap. Weights are not baked in.
+
+**Compose:** a one-shot `model-cache` service copies the model from the G: HF cache into a named volume (recopies only when `refs/main` changes); the gateway mounts it read-only with `HF_HUB_OFFLINE=1`, plus `./models` (injection detector, D-017) and `./logs`. `scripts/stack.ps1 up|down|status|logs` drives it from Windows.
+
+**What the measurements showed / what failed.**
+- **Linux torch from PyPI is the CUDA build**: the lockfile carried 15 `nvidia-*` packages + triton (GBs). Fixed by pinning torch to PyTorch's CPU index for all platforms.
+- **WSL stops a distro ~15 s after its last `wsl.exe` process exits**, taking Docker and the gateway with it (first chat requests from Windows were dropped mid-connection). `stack.ps1 up` starts a hidden keep-alive (`sleep infinity`), `down` removes it — chosen over a global `.wslconfig` `instanceIdleTimeout`, which would also keep the owner's other distro running.
+- **Slow package downloads (56–84 KB/s) were the ISP's IPv4 route to PyPI's CDN**, not Docker: Windows gets 4.8 MB/s over IPv6 but 0.28 MB/s over IPv4, and WSL's NAT network has no IPv6. The first build took ~25 min; later builds use uv's cache mount. Fix (not applied, global): WSL mirrored networking.
+- **The Windows mount reads at 13 MB/s** from WSL: loading weights from it cost ~55 s on every start → model volume.
+- **Cold first request took 46 s** (weights paged in lazily) → startup warm-up (one token): first request 3 s.
+- **HDD:** startup is dominated by importing thousands of small `.pyc` files. Time to healthy: warm restart 13–15 s; cold (after reboot) ~75 s; very first `up` ~2:45. Health-check `start-period` 180 s and the script's wait (5 min) are sized for that.
+- **Generation in the container: 14–16 tok/s**, at or above native Windows (11.5, D-013).
+- Windows PowerShell 5.1 turns native stderr into errors under `ErrorActionPreference=Stop`, and `Set-Content -Encoding utf8` writes a BOM that breaks TOML.
+
+**Consequences.** Cold starts are slow because G: is an HDD; moving only Docker's distro to C: (SSD, 81 GB free) would cut them, at the cost of the "everything on G:" rule — owner's call. Docker Desktop still runs alongside and uses RAM; quitting or uninstalling it is the owner's call.
+
+---
+
 ## Open questions
-- Docker Engine in WSL2 vs Docker Desktop (D-007).
+- ~~Docker Engine in WSL2 vs Docker Desktop (D-007)~~ — resolved in D-018.
+- WSL mirrored networking (`.wslconfig`, global) would give the distro IPv6 and fast PyPI downloads (D-018); needs `wsl --shutdown`.
 - ~~Default temperature~~ — resolved in D-015: stays 0.0; only greedy outputs are cached.
 - Retrain the injection detector on issues from all four repos once ingestion exists (D-017), and choose its threshold on training data rather than the default 0.5.
 - llama.cpp backend (llama-cpp-python, MIT; quantised GGUF) as a second local backend. Likely 2–4× faster on CPU than transformers; measure against D-013's 11.5 tok/s baseline and check output quality at Q8/Q4 before switching. Windows install needs a prebuilt CPU wheel or a C++ toolchain.
