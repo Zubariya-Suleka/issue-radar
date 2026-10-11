@@ -98,6 +98,15 @@ def test_off_mode_skips_the_check(settings, read_log):
     assert "injection_score" not in read_log()[0]
 
 
+def test_missing_tfidf_model_fails_at_startup_with_the_fix(settings, tmp_path):
+    settings.safety_detector = "tfidf"
+    settings.safety_model_path = tmp_path / "missing.joblib"
+
+    with pytest.raises(RuntimeError, match="Train it with"):
+        with TestClient(create_app(settings)):
+            pass
+
+
 def test_tfidf_detector_loads_a_trained_model(settings, tmp_path):
     pytest.importorskip("sklearn")
     from gateway.safety.detectors import TfidfDetector

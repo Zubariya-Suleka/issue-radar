@@ -31,7 +31,18 @@ def build_injection_check(settings: Settings) -> InjectionCheck | None:
     if settings.safety_mode == "off":
         return None
     if settings.safety_detector == "tfidf":
-        detector: Detector = TfidfDetector.load(settings.safety_model_path)
+        # Fail at startup with the fix, not with a bare traceback.
+        if not settings.safety_model_path.exists():
+            raise RuntimeError(
+                f"No injection model at {settings.safety_model_path}. Train it with: "
+                "uv run python services/gateway/benchmarks/prompt_injection.py"
+            )
+        try:
+            detector: Detector = TfidfDetector.load(settings.safety_model_path)
+        except ImportError as exc:
+            raise RuntimeError(
+                "The tfidf detector needs scikit-learn: uv sync --all-packages --extra safety"
+            ) from exc
     else:
         detector = HeuristicDetector()
     return InjectionCheck(detector, settings.safety_threshold, settings.safety_mode)
