@@ -11,3 +11,14 @@ Runs entirely on a CPU-only laptop with small open models.
 3. **SQL agent**: function-calling agent over Postgres that answers questions about repos, issues and contributors.
 
 Source repos: pandas, scikit-learn, pydantic, polars.
+
+## Development
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12.
+
+```sh
+uv sync                                                   # install (fake backend only)
+uv run pytest                                             # tests
+uv run uvicorn gateway.main:create_app --factory          # gateway on :8000
+uv sync --all-packages --extra local                      # + torch/transformers for SmolLM
+GATEWAY_BACKEND=smollm uv run uvicorn gateway.main:create_app --factory
+```

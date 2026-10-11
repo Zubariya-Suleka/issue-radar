@@ -1,7 +1,7 @@
 """Local SmolLM2 backend via Hugging Face transformers.
 
 YOUR PART: implement this class so it satisfies ModelBackend (see base.py).
-Install the heavy dependencies first:  uv sync --extra local
+Install the heavy dependencies first (from the repo root):  uv sync --all-packages --extra local
 
 Questions your implementation has to answer (decide, then note anything non-obvious
 for DECISIONS.md):

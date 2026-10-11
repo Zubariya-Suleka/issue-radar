@@ -158,6 +158,49 @@ Format: **Context** (the problem) → **Options** (real alternatives) → **Deci
 
 ---
 
+## D-010 · Backend contract: a `typing.Protocol` over internal types
+*2026-10-11 · Status: accepted*
+
+**Context.** Gateway logic (cache, limiter, safety, logging) must not know what produces the text, so models can be swapped by config.
+
+**Options.** (a) `typing.Protocol`: any class with a matching `name` and async `generate` qualifies; checked by the type checker. (b) `abc.ABC`: backends inherit a base class; a missing method fails at instantiation.
+
+**Decision.** `Protocol`, with frozen dataclasses `GenerationRequest` / `GenerationResult` as the only types crossing the boundary. The OpenAI schema stays in `gateway.api`; backends never import it.
+
+**Why.** Small interface, no inheritance ceremony, and test fakes are plain classes. Internal types decouple backends from the wire format and carry token counts for logging and limits. Frozen + tuples make requests hashable, which the cache can use.
+
+**Consequences.** A backend with a wrong signature is caught by a type checker, not at runtime, so type checking should eventually run in CI.
+
+---
+
+## D-011 · Busy policy: one generation at a time, queue with timeout
+*2026-10-11 · Status: accepted*
+
+**Context.** On a 4-core CPU, concurrent generations each slow down roughly in proportion; concurrency adds latency, not throughput. And `model.generate()` blocks, so it must never run on the event loop.
+
+**Options.** (a) Queue: wait up to N seconds for the model, then 503. (b) Reject immediately with 503 + Retry-After.
+
+**Decision.** Queue with timeout (`GATEWAY_QUEUE_TIMEOUT_S`, default 30s), implemented as a `SerialBackend` wrapper around any backend; busy → 503 with an OpenAI-style error body.
+
+**Why.** Eval runs fire many requests; queueing absorbs bursts without forcing every caller to write retry logic. Making it a wrapper keeps backends simple and applies the policy uniformly.
+
+**Consequences.**
+- The timeout covers waiting only; a started generation runs to completion (a CPU-bound thread can't be cancelled).
+- If a client disconnects mid-generation and the server cancels the handler, the lock is released while the worker thread may still be running, briefly allowing two generations. Acceptable for now; revisit if it shows up in load tests.
+- This protects the CPU. It is not rate limiting: the limiter (later) protects fairness between clients. Different jobs.
+
+---
+
+## D-012 · Tooling: uv workspace, one lockfile
+*2026-10-11 · Status: accepted*
+
+**Decision.** A root uv workspace with each service as a member: one `uv.lock`, one dev virtualenv, per-service `pyproject.toml` for Docker images. Heavy model dependencies (torch, transformers) sit behind the gateway's optional `local` extra so tests never need them. uv and Hugging Face caches live on G: (`UV_CACHE_DIR`, `HF_HOME`) per D-007.
+
+**Note.** Starlette's test client now prefers `httpx2` (BSD-3, pydantic org) over `httpx`; the dev group uses it.
+
+---
+
 ## Open questions
 - Docker Engine in WSL2 vs Docker Desktop (D-007).
+- Default temperature (currently 0.0, greedy). Revisit with the cache design: caching non-greedy outputs changes their meaning.
 - Main RAG eval axis: chunking strategies vs retrieval method (BM25 / dense / hybrid). Issue text is short and identifier-heavy, so chunking may matter mainly for long PR threads.

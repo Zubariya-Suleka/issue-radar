@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Heavy and only needed for the local model backend: `uv sync --extra local`
+# Heavy and only needed for the local model backend: `uv sync --all-packages --extra local`
 local = ["torch>=2.4", "transformers>=4.45"]
 
 [build-system]
