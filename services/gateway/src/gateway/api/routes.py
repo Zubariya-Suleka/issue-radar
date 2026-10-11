@@ -1,8 +1,9 @@
+import asyncio
 import time
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
 from gateway.api.deps import client_name, enforce_rate_limit
 from gateway.api.errors import ApiError
@@ -35,6 +36,7 @@ def allowed_client(request: Request, client: Annotated[str, Depends(client_name)
 async def chat_completions(
     body: ChatCompletionRequest,
     request: Request,
+    response: Response,
     client: Annotated[str, Depends(allowed_client)],
 ) -> ChatCompletionResponse:
     settings = request.app.state.settings
@@ -64,6 +66,22 @@ async def chat_completions(
     )
     if settings.log_content:
         annotate(messages=[{"role": m.role, "content": m.content} for m in gen_request.messages])
+
+    # Before the cache: a blocked request must not be answered from it either.
+    check = request.app.state.injection_check
+    if check is not None:
+        score = await asyncio.to_thread(check.score, gen_request.messages)
+        flagged = score >= check.threshold
+        annotate(injection_score=round(score, 3), injection_flagged=flagged)
+        if flagged and check.mode == "block":
+            raise ApiError(
+                400,
+                "Request blocked: possible prompt injection in a user message",
+                "invalid_request_error",
+                "prompt_injection_detected",
+            )
+        if flagged:
+            response.headers["X-Injection-Flagged"] = "true"
 
     result = await backend.generate(gen_request)
 

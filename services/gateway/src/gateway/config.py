@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     rate_limit_per_minute: float = 30.0
     rate_limit_burst: int = 10
 
+    # Prompt-injection check on user messages (D-017). "flag" logs the score and sets an
+    # X-Injection-Flagged header; "block" returns 400. TF-IDF is far better than the
+    # heuristic but needs the 'safety' extra and a model trained by the benchmark script.
+    safety_mode: Literal["off", "flag", "block"] = "flag"
+    safety_detector: Literal["heuristic", "tfidf"] = "heuristic"
+    safety_model_path: Path = Path("models/prompt_injection_tfidf.joblib")
+    safety_threshold: float = 0.5
+
     @field_validator("api_keys")
     @classmethod
     def keys_are_distinct_and_non_empty(cls, keys: dict[str, str]) -> dict[str, str]:

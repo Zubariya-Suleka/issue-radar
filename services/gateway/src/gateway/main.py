@@ -15,6 +15,7 @@ from gateway.backends.serial import BackendBusyError, SerialBackend
 from gateway.config import Settings
 from gateway.rate_limit import RateLimiter
 from gateway.request_log import close_request_log, configure_request_log, log_requests
+from gateway.safety.check import build_injection_check
 
 
 async def backend_busy_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None, backend: ModelBackend | None = 
             if settings.rate_limit_per_minute > 0
             else None
         )
+        app.state.injection_check = build_injection_check(settings)
         yield
         close_request_log()
 
