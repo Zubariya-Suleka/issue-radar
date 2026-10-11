@@ -19,6 +19,7 @@ Find open-source issues worth contributing to. Three parts, built in order:
 uv sync                                    # dev install (fake backend only)
 uv sync --all-packages --extra local       # + torch/transformers for SmolLM (plain --extra local fails at the workspace root)
 uv run pytest                              # tests (fast; never load a model)
+uv run pytest -m slow                      # real-model tests (~30 s; skipped if weights not cached)
 uv run ruff check . && uv run ruff format --check .
 uv run uvicorn gateway.main:create_app --factory          # gateway on :8000
 # PowerShell: $env:GATEWAY_BACKEND="smollm"; uv run uvicorn gateway.main:create_app --factory
@@ -32,10 +33,10 @@ uv run uvicorn gateway.main:create_app --factory          # gateway on :8000
 ## Code map (gateway)
 - `backends/base.py` — the contract: `ModelBackend` Protocol + frozen `GenerationRequest`/`GenerationResult` (D-010).
 - `backends/serial.py` — one generation at a time, queue timeout → 503 (D-011).
-- `backends/fake.py` — instant echo backend for tests. `backends/smollm.py` — **owner's stub to implement**.
+- `backends/fake.py` — instant echo backend for tests. `backends/smollm.py` — SmolLM2 via transformers, bf16 (D-013).
 - `api/schemas.py` + `api/routes.py` — OpenAI-compatible subset; unsupported fields → 422 (D-008).
 
 ## Current status — update at the end of each session
-- Done: repo, licence, DECISIONS D-001..D-012, gateway skeleton (13 tests passing), pushed to github.com/Zubariya-Suleka/issue-radar.
-- **Next (owner):** implement `SmolLMBackend` in `services/gateway/src/gateway/backends/smollm.py` (its docstring lists 7 questions to answer), then Claude reviews.
-- After that: request logging → cache (revisit default temperature) → rate limiter → safety checks + prompt-injection benchmark (deepset/prompt-injections) → Docker.
+- Done: repo, licence, DECISIONS D-001..D-013, gateway skeleton, SmolLM backend (written by Claude at the owner's request; 13 fast + 7 slow tests passing). Model weights cached in G:\cache\huggingface (~730 MB).
+- **Next:** request logging → cache (revisit default temperature) → rate limiter → safety checks + prompt-injection benchmark (deepset/prompt-injections) → Docker.
+- Candidate: llama.cpp backend as a measured speed experiment (open question in DECISIONS).

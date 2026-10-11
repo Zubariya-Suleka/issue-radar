@@ -200,7 +200,30 @@ Format: **Context** (the problem) → **Options** (real alternatives) → **Deci
 
 ---
 
+## D-013 · SmolLM backend: transformers, bf16, template defaults kept
+*2026-10-11 · Status: accepted*
+
+**Context.** First real backend behind the D-010 contract. Built on transformers 5.19 / torch 2.14 (CPU).
+
+**Decisions and measurements.**
+- **dtype: bf16, set explicitly.** transformers v5 loads in the checkpoint's dtype (bf16) by default. D-001 expected bf16 to be slow on this CPU, so both were measured, 64 greedy tokens, 4 threads: bf16 11.4 tok/s, fp32 11.7 tok/s — the same. bf16 wins on RAM (~0.7 GB vs ~1.45 GB). D-001's bf16 worry does not hold at this model size.
+- **Prompt: the tokenizer's chat template with `add_generation_prompt=True`.** With no system message, SmolLM2's template injects *"You are a helpful AI assistant named SmolLM, trained by Hugging Face"* (~13 prompt tokens). Kept: it is the distribution the model was tuned on. Callers that need a different persona send their own system message, which replaces it.
+- **temperature 0 → greedy (`do_sample=False`).** Sampling at temperature 0 divides logits by zero. When sampling, transformers also applies **top_k=50** by default; OpenAI's `temperature` means plain temperature sampling. Kept as a known divergence: a 360M model's low-probability tail is mostly noise.
+- **finish_reason from the last token**, not the count: EOS can land exactly on the `max_tokens`-th token. `completion_tokens` includes the EOS token (it was computed, so it counts).
+- **Blocking:** `asyncio.to_thread`, with `torch.inference_mode()` entered *inside* the worker (grad mode is thread-local).
+- **Tests:** marked `slow`, deselected by default, skipped unless the weights are cached — the default `pytest` never loads or downloads a model.
+
+**What failed / gotchas.**
+- v5 `apply_chat_template(..., return_tensors="pt")` returns a `BatchEncoding` (dict), not a tensor; v4-era tutorial code breaks.
+- The model repo is ~5.8 GB, ~5 GB of it ONNX variants we never use. `hf download` with positional filenames silently ignores `--include/--exclude`; download the eight needed files by name (command in `test_smollm_backend.py`).
+- Windows without Developer Mode can't create symlinks, so the HF cache stores real copies. Harmless with one revision.
+
+**Consequences.** ~1.5 s per 16 tokens means eval runs over hundreds of prompts take minutes; the cache matters.
+
+---
+
 ## Open questions
 - Docker Engine in WSL2 vs Docker Desktop (D-007).
 - Default temperature (currently 0.0, greedy). Revisit with the cache design: caching non-greedy outputs changes their meaning.
+- llama.cpp backend (llama-cpp-python, MIT; quantised GGUF) as a second local backend. Likely 2–4× faster on CPU than transformers; measure against D-013's 11.5 tok/s baseline and check output quality at Q8/Q4 before switching. Windows install needs a prebuilt CPU wheel or a C++ toolchain.
 - Main RAG eval axis: chunking strategies vs retrieval method (BM25 / dense / hybrid). Issue text is short and identifier-heavy, so chunking may matter mainly for long PR threads.
