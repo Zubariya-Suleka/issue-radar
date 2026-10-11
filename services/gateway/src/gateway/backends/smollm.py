@@ -1,37 +1,71 @@
-"""Local SmolLM2 backend via Hugging Face transformers.
+"""Local SmolLM2 backend via Hugging Face transformers (D-013).
 
-YOUR PART: implement this class so it satisfies ModelBackend (see base.py).
 Install the heavy dependencies first (from the repo root):  uv sync --all-packages --extra local
-
-Questions your implementation has to answer (decide, then note anything non-obvious
-for DECISIONS.md):
-
-1. Loading: what happens once in __init__, and what must never happen per request?
-2. Prompt: the model is chat-tuned. How do `request.messages` become input ids so the
-   model sees the format it was trained on? (Look at the tokenizer's chat template, and
-   at what `add_generation_prompt` does.)
-3. Decoding: `generate()` returns prompt + completion ids. How do you return only the
-   completion text, and count prompt_tokens / completion_tokens correctly?
-4. finish_reason: how can you tell "stopped naturally" from "hit max_tokens"?
-5. temperature: what should temperature == 0.0 map to? (Sampling with temperature 0
-   is not the same thing as greedy decoding in transformers.)
-6. Blocking: model.generate() is CPU-bound and blocks for seconds. `generate` here is
-   async; how do you keep the event loop free while it runs? (D-011 explains why.)
-7. Memory/speed on CPU: gradients are not needed at inference; how do you tell torch?
-
-Tests for this backend should be marked slow and skipped unless the model is available,
-so the default test run stays fast.
 """
 
+import asyncio
 from pathlib import Path
 
-from gateway.backends.base import GenerationRequest, GenerationResult
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from gateway.backends.base import FinishReason, GenerationRequest, GenerationResult
 
 
 class SmolLMBackend:
     def __init__(self, model_id: str, cache_dir: Path | None = None) -> None:
         self.name = model_id
-        raise NotImplementedError("Load the tokenizer and model here, once.")
+        # Loading takes seconds and ~0.7 GB: once per process, never per request.
+        self._tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
+        # bf16 is how the weights ship; on this CPU it measured as fast as fp32 at half the RAM.
+        self._model = AutoModelForCausalLM.from_pretrained(
+            model_id, cache_dir=cache_dir, dtype=torch.bfloat16
+        )
+        self._model.eval()
+        eos = self._model.generation_config.eos_token_id
+        self._eos_ids = frozenset(eos if isinstance(eos, list) else [eos])
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
-        raise NotImplementedError
+        # model.generate() blocks for seconds; a worker thread keeps the event loop free (D-011).
+        return await asyncio.to_thread(self._generate_blocking, request)
+
+    def _generate_blocking(self, request: GenerationRequest) -> GenerationResult:
+        # The chat template wraps messages in the ChatML markers the model was tuned on.
+        # add_generation_prompt appends the assistant header so the model answers rather than
+        # continuing the user's turn. With no system message, the template adds SmolLM's
+        # default one; callers override it by sending their own (D-013).
+        inputs = self._tokenizer.apply_chat_template(
+            [{"role": m.role, "content": m.content} for m in request.messages],
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+        )
+        prompt_tokens = inputs["input_ids"].shape[1]
+
+        # Temperature 0 means greedy. Sampling at temperature 0 would divide logits by zero.
+        if request.temperature == 0.0:
+            sampling = {"do_sample": False}
+        else:
+            sampling = {"do_sample": True, "temperature": request.temperature}
+
+        # inference_mode is thread-local, so it must be entered here, on the worker thread.
+        with torch.inference_mode():
+            output = self._model.generate(
+                **inputs,
+                max_new_tokens=request.max_tokens,
+                pad_token_id=self._tokenizer.pad_token_id,
+                **sampling,
+            )
+
+        # generate() returns prompt + completion; keep only the new ids.
+        completion = output[0, prompt_tokens:].tolist()
+        # Check the last token, not the count: EOS can land exactly on the max_tokens-th token.
+        finish_reason: FinishReason = (
+            "stop" if completion and completion[-1] in self._eos_ids else "length"
+        )
+        return GenerationResult(
+            text=self._tokenizer.decode(completion, skip_special_tokens=True),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=len(completion),
+            finish_reason=finish_reason,
+        )

@@ -19,7 +19,9 @@ dev = ["pytest>=8.3", "httpx2", "ruff>=0.6"]
 
 [tool.pytest.ini_options]
 testpaths = ["services/gateway/tests"]
-addopts = "--import-mode=importlib"
+# Slow tests load the real model; deselected by default. Run them with: pytest -m slow
+addopts = "--import-mode=importlib -m 'not slow'"
+markers = ["slow: needs the real model (torch + cached weights); deselected by default"]
 
 [tool.ruff]
 line-length = 100
