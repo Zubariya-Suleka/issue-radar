@@ -11,8 +11,12 @@ from gateway.main import create_app
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    # _env_file=None: tests must not depend on a developer's local .env
-    return Settings(_env_file=None, backend="fake", log_file=tmp_path / "gateway.jsonl")
+    # _env_file=None: tests must not depend on a developer's local .env.
+    # warmup=False: several tests use backends that fail on purpose; a failing warm-up
+    # (rightly) stops startup.
+    return Settings(
+        _env_file=None, backend="fake", log_file=tmp_path / "gateway.jsonl", warmup=False
+    )
 
 
 @pytest.fixture

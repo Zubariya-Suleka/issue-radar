@@ -110,6 +110,20 @@ def test_hits_skip_the_queue_and_are_logged(settings, read_log):
     assert "queue_ms" not in hit  # never reached SerialBackend
 
 
+def test_startup_warms_the_model_up_outside_the_cache_and_log(settings, read_log):
+    settings.warmup = True
+    inner = Counting()
+    with TestClient(create_app(settings, backend=inner)) as client:
+        client.post(
+            "/v1/chat/completions",
+            json={"model": "x", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+        )
+
+    # The warm-up request is identical but was not cached: the real one generated again.
+    assert inner.calls == 2
+    assert len(read_log()) == 1  # only the real request is logged
+
+
 def test_cache_can_be_disabled(settings):
     settings.cache_max_entries = 0
     inner = Counting()

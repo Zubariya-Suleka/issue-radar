@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from gateway.api.errors import ApiError, api_error_handler
 from gateway.api.routes import router
-from gateway.backends.base import ModelBackend
+from gateway.backends.base import GenerationRequest, Message, ModelBackend
 from gateway.backends.cached import CachedBackend
 from gateway.backends.factory import build_backend
 from gateway.backends.serial import BackendBusyError, SerialBackend
@@ -36,10 +36,16 @@ def create_app(settings: Settings | None = None, backend: ModelBackend | None = 
         # Runs once at startup, before the first request: load the model here, never per request.
         configure_request_log(settings.log_file)
         app.state.settings = settings
+        inner = backend or build_backend(settings)
+        if settings.warmup:
+            # One token touches every layer, so all weights are paged in now rather than
+            # during the first real request (46 s in Docker, where weights are read lazily
+            # from the G: mount; D-018). Startup and /health wait for it.
+            await inner.generate(
+                GenerationRequest((Message("user", "hi"),), max_tokens=1, temperature=0.0)
+            )
         # Cache outside the queue: a hit never waits for the model.
-        model: ModelBackend = SerialBackend(
-            backend or build_backend(settings), queue_timeout_s=settings.queue_timeout_s
-        )
+        model: ModelBackend = SerialBackend(inner, queue_timeout_s=settings.queue_timeout_s)
         if settings.cache_max_entries > 0:
             model = CachedBackend(model, max_entries=settings.cache_max_entries)
         app.state.backend = model

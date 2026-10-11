@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Greedy by default: repeatable outputs, which the cache relies on (D-015).
     default_temperature: float = 0.0
 
+    # Generate one token at startup so the first real request isn't slowed by loading (D-018).
+    warmup: bool = True
+
     # How long a request may wait for its turn on the model before getting a 503 (D-011).
     queue_timeout_s: float = 30.0
 
