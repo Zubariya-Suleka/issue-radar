@@ -13,6 +13,14 @@ members = ["services/gateway"]
 
 [tool.uv.sources]
 issue-radar-gateway = { workspace = true }
+# CPU-only torch everywhere. On Linux, PyPI's torch is the CUDA build and pulls ~15 nvidia-*
+# packages (GBs) that a CPU-only machine and its Docker images never use.
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true  # used only for packages pinned to it above
 
 [dependency-groups]
 # Benchmark scripts only (services/gateway/benchmarks): `uv sync --group bench`
